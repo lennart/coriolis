@@ -3,14 +3,17 @@ module Math.RPS.RPS where
 import qualified Data.ByteString.Char8 as B
 import qualified Data.ByteString.Lazy as BS
 import Data.Char
+import Data.List
 import Data.Csv
 import Data.Maybe
+import Data.Sequence (fromList, update)
+import Data.Foldable (toList)
 
 import Linear.Matrix
 import Linear.Quaternion
 import Linear.V3
 import Sound.OSC.FD
-import qualified Sound.Tidal.Stream as S (stream, name, params)
+import qualified Sound.Tidal.Stream as S (stream, name, params, Param(..) )
 import qualified Sound.Tidal.Dirt as D
 import Control.Concurrent
 
@@ -23,7 +26,90 @@ replaceDot x = x
 
 
 -- Dirt Bridge
+
+dirtBridge port = do
+  x <- udpServer "127.0.0.1" port
+  c <- openUDP "127.0.0.1" 7771 -- dirt
+  rotationM <- newMVar (0.0, 0, 0, 0)
+  forkIO $ loop x c rotationM
+  return $ (client, rotationClient)
+    where loop x c rotationM = do m <- recvMessage x
+                                  act m c rotationM
+                                  loop x c rotationM
+          act (Just (Message "/play" (sec:usec:cps:params))) c rotationM = do
+                maybeRot <- tryReadMVar rotationM
+                case maybeRot of
+                  Just (rad, ix, iy, iz) -> do
+                    let decodedParams = decodeDirtParams params
+                        updatedParams = rotateDirtParamsBy (ix, iy, iz) rad decodedParams
+                    sendOSC c $ Message "/play" $ [sec, usec, cps] ++ (map paramToDatum updatedParams)
+                    return ()
+                  Nothing -> return()
+                return ()
+          act (Just (Message "/rotate" (degrees:x:y:z:rest))) c rotationM = do
+                let v = (fromJust $ d_get degrees) :: Int
+                    x' = (fromJust $ d_get x) :: Int
+                    y' = (fromJust $ d_get y) :: Int
+                    z' = (fromJust $ d_get z) :: Int
+                rad <- rotRadians v
+                swapMVar rotationM (rad, x', y', z')
+                return ()
+          act m c rotationM = do
+                putStrLn ("Unknown message: " ++ (show m))
+                return ()
+          rotRadians x = return $ ((fromIntegral x) / 360) * (pi*2)
+          client = dirtBridgeStream D.dirt port
+          rotationClient = openUDP "127.0.0.1" port
+
+rotateParams s degrees paramIds = do
+  let params = catMaybes $ map (\i -> elemIndex i dirtKeynames) paramIds
+  
+  sendOSC s $ Message "/rotate" ([int32 degrees] ++ (map int32 params))
+
+dirtBridgeStream shape port = S.stream "127.0.0.1" port shape
+
+dirtKeynames = map (S.name) (S.params D.dirt)
+               
+
+data RParam = RF { fvalue :: Float } | RI { ivalue :: Int } | RS { svalue :: String }
+
+getParam params x = params !! x
+
+getParamsOrigin x y z = map (\index -> paramOrigin !! index) [x, y, z]
+
+
+paramToDatum (RF x) = float x
+paramToDatum (RI x) = int32 x
+paramToDatum (RS x) = string x
+
+
+getParamValue (RF x) = x
+getParamValue (RI x) = fromIntegral $ x
+getParamValue (RS x) = 0.0 -- ignore strings
+
+setParamValue (RF x) v = RF v
+setParamValue (RI x) v = RI (floor $ v)
+setParamValue (RS x) v = RS x -- passthru value
+
+rotateDirtParamsBy (ix, iy, iz) angle params = let params' = fromList params
+                                                   [ox, oy, oz] = getParamsOrigin ix iy iz
+                                                   [px, py, pz] = map (getParam params) [ix, iy, iz]
+                                                   [x, y, z] = map getParamValue [px, py, pz]
+                                                   (V3 x' y' z') = pMult (makeRotationMatrix angle ox oy oz) x y z
+                                                   params'' = update ix (setParamValue px x') params'
+                                                   params''' = update iy (setParamValue py y') params''
+                                                   params'''' = update iz (setParamValue pz z') params'''
+                                               in toList params''''    
+  
+decodeDirtParam (S.F _ _) x = RF ((fromJust $ d_get x) :: Float)
+decodeDirtParam (S.I _ _) x = RI ((fromJust $ d_get x) :: Int)
+decodeDirtParam (S.S _ _) x = RS ((B.unpack $ fromJust $ d_get x) :: String)
+
+decodeDirtParams params = zipWith (decodeDirtParam) (S.params D.dirt) params
+
+-- FIXME: Improve origin values, think about scaling e.g. logarithmic for cutoff/hcutoff
 paramOrigin = [
+              0.0,
               0.0,
               0.5,
               0.5,
@@ -49,55 +135,6 @@ paramOrigin = [
               0.5,
               0.0
               ]
-
-dirtBridge port = do
-  x <- udpServer "127.0.0.1" port
-  rotationM <- newMVar (0.0, 0, 0, 0)
-  forkIO $ loop x rotationM
-  return $ (client, rotationClient)
-    where loop x rotationM = do m <- recvMessage x
-                                act m rotationM
-                                loop x rotationM
-          act (Just (Message "/play" (sec:usec:cps:sound:params))) rotationM = do
-                putStrLn ("Recv Play call with params: " ++ (show params))
-                maybeRot <- tryReadMVar rotationM
-                case maybeRot of
-                  Just (rad, px, py, pz) -> do
-                    let (ox, oy, oz) = (realToFrac $ paramOrigin !! px, realToFrac $ paramOrigin !! py, realToFrac $ paramOrigin !! pz)
-                        (vx, vy, vz) = (params !! px, params !! py, params !! pz)
-                        vx' = fromIntegral $ ((fromJust $ d_get vx) :: Int)
-                        vy' = fromIntegral $ ((fromJust $ d_get vy) :: Int)
-                        vz' = fromIntegral $ ((fromJust $ d_get vz) :: Int)
-                        a = 0.5
-                        b = 0.25
-                        (V3 vx'' vy'' vz'') = pMult (makeRotationMatrix pi a a a) b b b
-  --                  putStrLn ("Rotating: " ++ (show px) ++ (show py) ++ (show pz) ++ " by: " ++ (show rad) ++ "rad")
-    --                putStrLn ("Rotated Point: " ++ (show vx'') ++ (show vy'') ++ (show vz''))
-                    return ()
-                
-                    
-                  Nothing -> return()
-                return ()
-          act (Just (Message "/rotate" (degrees:x:y:z:rest))) rotationM = do
-                putStrLn ("Recv Rotate call with degrees: " ++ (show degrees) ++ " and paramIds: " ++ (show x) ++ (show y) ++ (show z))
-                let v = (fromJust $ d_get degrees) :: Int
-                    x' = (fromJust $ d_get x) :: Int
-                    y' = (fromJust $ d_get y) :: Int
-                    z' = (fromJust $ d_get z) :: Int
-                rad <- rotRadians v
-                swapMVar rotationM (rad, x', y', z')
-                return ()
-          rotRadians x = return $ ((fromIntegral x) / 360) * (pi*2)
-          client = dirtBridgeStream D.dirt port
-          rotationClient = openUDP "127.0.0.1" port
-
-rotateParams s degrees paramIds = do
-  sendOSC s $ Message "/rotate" ([int32 degrees] ++ (map int32 paramIds))
-
-dirtBridgeStream shape port = S.stream "127.0.0.1" port shape
-
-
-
 
 -- core functions
 
