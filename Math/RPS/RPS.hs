@@ -71,7 +71,7 @@ dirtBridgeStream shape port = S.stream "127.0.0.1" port shape
 dirtKeynames = map (S.name) (S.params D.dirt)
                
 
-data RParam = RF { fvalue :: Float } | RI { ivalue :: Int } | RS { svalue :: String }
+data RParam = RF { fvalue :: Float } | RI { ivalue :: Int } | RS { svalue :: String } | RDefault { dparam :: RParam }
 
 getParam params x = params !! x
 
@@ -81,15 +81,19 @@ getParamsOrigin x y z = map (\index -> paramOrigin !! index) [x, y, z]
 paramToDatum (RF x) = float x
 paramToDatum (RI x) = int32 x
 paramToDatum (RS x) = string x
-
+paramToDatum (RDefault x) = paramToDatum x
 
 getParamValue (RF x) = x
 getParamValue (RI x) = fromIntegral $ x
 getParamValue (RS x) = 0.0 -- ignore strings
+getParamValue (RDefault x) = 0.0
 
 setParamValue (RF x) v = RF v
 setParamValue (RI x) v = RI (floor $ v)
 setParamValue (RS x) v = RS x -- passthru value
+setParamValue (RDefault (RF x)) v = RF x
+setParamValue (RDefault (RI x)) v = RI x
+setParamValue (RDefault (RS x)) v = RS x
 
 rotateDirtParamsBy (ix, iy, iz) angle params = let params' = fromList params
                                                    [ox, oy, oz] = getParamsOrigin ix iy iz
@@ -100,10 +104,36 @@ rotateDirtParamsBy (ix, iy, iz) angle params = let params' = fromList params
                                                    params''' = update iy (setParamValue py y') params''
                                                    params'''' = update iz (setParamValue pz z') params'''
                                                in toList params''''    
-  
-decodeDirtParam (S.F _ _) x = RF ((fromJust $ d_get x) :: Float)
-decodeDirtParam (S.I _ _) x = RI ((fromJust $ d_get x) :: Int)
-decodeDirtParam (S.S _ _) x = RS ((B.unpack $ fromJust $ d_get x) :: String)
+
+
+
+decodeDirtParam (S.F _ (Just d)) x = let x' = ((fromJust $ d_get x) :: Float)
+                                     in case (realToFrac d) == (realToFrac x') of
+                                       True ->
+                                         RDefault (RF x')
+                                       False ->
+                                         RF x'
+decodeDirtParam (S.F _ Nothing) x = RF ((fromJust $ d_get x) :: Float)
+
+decodeDirtParam (S.I _ (Just d)) x = let x' = ((fromJust $ d_get x) :: Int)
+                                     in case d == x' of
+                                       True ->
+                                         RDefault (RI x')
+                                       False ->
+                                         RI x'
+decodeDirtParam (S.I _ Nothing) x = RI ((fromJust $ d_get x) :: Int)
+
+
+
+decodeDirtParam (S.S _ (Just d)) x = let x' = ((B.unpack $ fromJust $ d_get x) :: String)
+                                     in case d == x' of
+                                       True ->
+                                         RDefault (RS x')
+                                       False ->
+                                         RS x'
+decodeDirtParam (S.S _ Nothing) x = RS ((B.unpack $ fromJust $ d_get x) :: String)
+
+
 
 decodeDirtParams params = zipWith (decodeDirtParam) (S.params D.dirt) params
 
