@@ -1,4 +1,4 @@
-module Math.RPS.RPS where
+module Math.Coriolis.Coriolis where
 
 import qualified Data.ByteString.Char8 as B
 import qualified Data.ByteString.Lazy as BS
