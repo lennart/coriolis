@@ -21,11 +21,11 @@ add
 within `tidal-start-haskell` of your `tidal.el` file, then start up tidal and try out the following.
 
 ```haskell
-(b,r) <- dirtBridge 7777
-b' <- b
-r' <- r
+b <- dirtBridge 7777
+r <- rotatorStream "127.0.0.1" 7777
 
-b' $ every 2 ((within (0.5, 1.0) ((|+| delayfeedback "0.8") . (|+| speed "0.3") . (|+| coarse "8" ) . (|+| delay "0.4")))) $
+
+b $ every 2 ((within (0.5, 1.0) ((|+| delayfeedback "0.8") . (|+| speed "0.3") . (|+| coarse "8" ) . (|+| delay "0.4")))) $
   every 3 (within (0.0, 0.5) (|+| crush "-3")) $
   sound "bd sn"
   |+| delayfeedback "0.5"
@@ -35,16 +35,17 @@ b' $ every 2 ((within (0.5, 1.0) ((|+| delayfeedback "0.8") . (|+| speed "0.3") 
   |+| cutoff "0.001"
   |+| resonance "0.9"
 
-b' silence
+b silence
 
-rotateParams r' 245 ["crush", "delay", "delayfeedback"]
+r 245 ["crush", "delay", "delayfeedback"]
 
-rotateParams r' 130 ["speed", "delay", "crush"]
+r 130 ["speed", "delay", "crush"]
 
-rotateParams r' 130 ["speed", "delayfeedback", "crush"]
+r 130 ["speed", "delayfeedback", "crush"]
 
 ```
 
 # Current Limitations
 
-only R^3 is implemented as a rotational space but n-dimensional rotation might be possible.
+- only R^3 is implemented as a rotational space but n-dimensional rotation might be possible.
+- running rotation within a `clockedTick` to change rotation over time, fails after short time

@@ -32,7 +32,7 @@ dirtBridge port = do
   c <- openUDP "127.0.0.1" 7771 -- dirt
   rotationM <- newMVar (0.0, 0, 0, 0)
   forkIO $ loop x c rotationM
-  return $ (client, rotationClient)
+  return =<< client
     where loop x c rotationM = do m <- recvMessage x
                                   act m c rotationM
                                   loop x c rotationM
@@ -46,8 +46,8 @@ dirtBridge port = do
                     return ()
                   Nothing -> return()
                 return ()
-          act (Just (Message "/rotate" (degrees:x:y:z:rest))) c rotationM = do
-                let v = (fromJust $ d_get degrees) :: Int
+          act (Just (Message "/rotate" (rot:x:y:z:rest))) c rotationM = do
+                let v = (fromJust $ d_get rot) :: Float
                     x' = (fromJust $ d_get x) :: Int
                     y' = (fromJust $ d_get y) :: Int
                     z' = (fromJust $ d_get z) :: Int
@@ -57,14 +57,17 @@ dirtBridge port = do
           act m c rotationM = do
                 putStrLn ("Unknown message: " ++ (show m))
                 return ()
-          rotRadians x = return $ ((fromIntegral x) / 360) * (pi*2)
+          rotRadians x = return $ ((realToFrac x)) * (pi*2)
           client = dirtBridgeStream D.dirt port
-          rotationClient = openUDP "127.0.0.1" port
 
-rotateParams s degrees paramIds = do
+rotatorStream :: String -> Int -> IO (Float -> [String] -> IO ())
+rotatorStream host port = do s <- openUDP host port
+                             return (\rot ids -> rotateParams s rot ids)
+
+
+rotateParams s rot paramIds = do
   let params = catMaybes $ map (\i -> elemIndex i dirtKeynames) paramIds
-  
-  sendOSC s $ Message "/rotate" ([int32 degrees] ++ (map int32 params))
+  sendOSC s $ Message "/rotate" ([float rot] ++ (map int32 params))
 
 dirtBridgeStream shape port = S.stream "127.0.0.1" port shape
 
